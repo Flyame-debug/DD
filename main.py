@@ -7,15 +7,28 @@ from pathlib import Path
 def setup_environment(is_colab=False):
     """设置环境，导入必要的包"""
     if is_colab:
-        # 在Colab中可能需要安装额外的包
         print("Running in Google Colab environment")
-        !pip install -q torch torchvision torchtext torchaudio
-        !pip install -q efficientnet-pytorch
-        !pip install -q albumentations
-    
-    # 添加项目根目录到路径
-    project_root = Path(__file__).parent
-    sys.path.append(str(project_root))
+        # 使用Python的subprocess模块来执行shell命令，这是正确的方法
+        import subprocess
+        import sys
+        
+        # 定义需要安装的包
+        packages = [
+            'torch',
+            'torchvision', 
+            'torchtext',
+            'torchaudio',
+            'efficientnet-pytorch',
+            'albumentations'
+        ]
+        
+        # 执行安装命令
+        for package in packages:
+            try:
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', package])
+                print(f"Successfully installed {package}")
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to install {package}: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description='胸部X光疾病分类')
@@ -35,10 +48,15 @@ def main():
     
     # 根据环境选择路径
     if args.colab:
-        config['paths'] = config['paths_colab']
-        # 挂载Google Drive
-        from google.colab import drive
-        drive.mount(config['paths']['drive_mount'])
+      config['paths'] = config['paths_colab']
+      # Google Drive 现在应已在Colab环境手动挂载
+      # 因此跳过脚本内的挂载尝试，仅检查路径是否存在
+      expected_mount_point = config['paths']['drive_mount']  # 即 '/content/drive'
+      if not os.path.exists(expected_mount_point):
+        print(f"警告: Google Drive 似乎未在预期位置挂载 ({expected_mount_point})。")
+        print("请确保已在Colab单元格中手动运行过: `from google.colab import drive; drive.mount('/content/drive')`")
+      else:
+        print(f"Google Drive 已挂载于: {expected_mount_point}")
     else:
         config['paths'] = config['paths_local']
     
