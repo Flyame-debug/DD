@@ -155,7 +155,7 @@ def train_model(config):
     
     # 加载和预处理数据
     logger.info("加载数据...")
-    train_df, val_df, test_df, class_weights = load_and_preprocess_data(config)
+    train_df, val_df, test_df, label_columns, class_weights = load_and_preprocess_data(config)
     
     # 创建数据集
     train_dataset = ChestXRayDataset(
