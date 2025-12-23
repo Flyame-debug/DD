@@ -42,6 +42,9 @@ def main():
     
     args = parser.parse_args()
     
+    # 设置环境（如果需要）
+    setup_environment(args.colab)
+    
     # 加载配置
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
@@ -70,15 +73,25 @@ def main():
     os.makedirs(config['paths']['output_dir'], exist_ok=True)
     
     # 运行相应模式
-    if args.mode == 'train':
-        from training.train import train_model
-        train_model(config)
-    elif args.mode == 'test':
-        from training.evaluate import evaluate_model
-        evaluate_model(config)
-    elif args.mode == 'predict':
-        from inference.predict import predict_single_image
-        predict_single_image(config)
+    try:
+        if args.mode == 'train':
+            from training.train import train_model
+            train_model(config)
+        elif args.mode == 'test':
+            from training.evaluate import evaluate_model
+            evaluate_model(config)
+        elif args.mode == 'predict':
+            from inference.predict import predict_single_image
+            predict_single_image(config)
+    except ImportError as e:
+        print(f"导入模块失败: {e}")
+        print("请确保所有依赖包已正确安装，或检查模块路径是否正确。")
+        sys.exit(1)
+    except Exception as e:
+        print(f"运行过程中发生错误: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

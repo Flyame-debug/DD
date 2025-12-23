@@ -13,26 +13,7 @@ from PIL import Image
 import glob
 
 from data.dataset import ChestXRayDataset
-# 修改导入语句，避免循环导入
-try:
-    from data.preprocess import load_and_preprocess_data
-except ImportError as e:
-    print(f"导入preprocess模块失败: {e}")
-    # 定义一个简化的加载函数作为备选
-    import pandas as pd
-    import numpy as np
-    from sklearn.model_selection import train_test_split
-    
-    def load_and_preprocess_data(config):
-        csv_path = config['paths']['csv_path']
-        print(f"正在加载数据从: {csv_path}")
-        df = pd.read_csv(csv_path)
-        print(f"数据集大小: {len(df)}")
-        
-        # 简化的数据处理逻辑
-        # ... 这里添加简化版本的数据处理代码
-        return None, None, None, None, None
-
+from data.preprocess import load_and_preprocess_data
 from models.model import DenseNet121MultiLabel, EfficientNetB4MultiLabel
 from training.losses import WeightedBCELoss, FocalLoss
 from training.metrics import calculate_metrics
@@ -236,7 +217,7 @@ def find_image_path(images_dir, image_name):
     
     return None
 
-def create_dataset_with_path_fix(df, images_dir, transform, phase, logger, config):
+def create_dataset_with_path_fix(df, images_dir, transform, phase, logger, config, label_columns):
     """创建数据集，自动修复图片路径"""
     # 收集有效的样本
     valid_indices = []
@@ -245,6 +226,9 @@ def create_dataset_with_path_fix(df, images_dir, transform, phase, logger, confi
     logger.info(f"开始查找和验证图片文件，共 {len(df)} 个样本...")
     
     image_size = config['data']['image_size'][0]  # 获取图像尺寸
+    
+    # 重置DataFrame索引，确保索引是连续的
+    df = df.reset_index(drop=True)
     
     for idx, row in tqdm(df.iterrows(), total=len(df), desc=f"查找{phase}图片"):
         image_name = row['Image Index']
@@ -267,17 +251,36 @@ def create_dataset_with_path_fix(df, images_dir, transform, phase, logger, confi
     if len(valid_indices) == 0:
         raise ValueError("没有找到任何有效的图片文件！")
     
+    # 使用有效的索引提取DataFrame行
+    # 确保索引在范围内
+    valid_indices = [idx for idx in valid_indices if idx < len(df)]
+    
     # 创建有效的DataFrame
     valid_df = df.iloc[valid_indices].copy()
     valid_df = valid_df.reset_index(drop=True)
     
-    # 创建数据集，但我们需要修改 __getitem__ 方法
+    # 只保留必要的列：图像索引、路径和标签列
+    columns_to_keep = ['Image Index'] + list(label_columns)
+    if 'image_path' in valid_df.columns:
+        columns_to_keep.insert(1, 'image_path')
+    valid_df = valid_df[columns_to_keep]
+    
+    logger.info(f"DataFrame形状: {valid_df.shape}")
+    logger.info(f"DataFrame列: {valid_df.columns.tolist()}")
+    
+    # 创建自定义数据集类
     class FixedChestXRayDataset(ChestXRayDataset):
         def __init__(self, df, image_paths, transform=None, phase='train', image_size=512):
-            super().__init__(df, '', transform, phase)  # 传递空字符串作为图像目录
+            # 保存df到实例变量
+            self.df = df
             self.image_paths = image_paths
             self.image_size = image_size
             self.invalid_image_cache = {}  # 缓存无效图片，避免重复打开
+            self.phase = phase
+            
+            # 调用父类初始化，但传递空字符串作为图像目录
+            # 因为我们使用自己的image_paths
+            super().__init__(df, '', transform, phase)
             
         def __getitem__(self, idx):
             img_path = self.image_paths[idx]
@@ -292,16 +295,41 @@ def create_dataset_with_path_fix(df, images_dir, transform, phase, logger, confi
                     image.load()  # 确保图片完全加载
                 except Exception as e:
                     # 创建黑色图像作为替代
-                    logger.warning(f"无法读取图片 {img_path}: {e}，使用黑色图像替代")
+                    print(f"无法读取图片 {img_path}: {e}，使用黑色图像替代")
                     image = Image.new('RGB', (self.image_size, self.image_size), color=0)
                     self.invalid_image_cache[img_path] = image
-                    
-            labels = self.df.iloc[idx, 2:].values.astype(np.float32)  # 跳过前两列（Image Index和image_path）
+            
+            # 获取标签 - 跳过前几列（'Image Index'和可能的'image_path'）
+            # 找到第一个标签列的索引
+            label_start_idx = 1  # 跳过'Image Index'
+            if 'image_path' in self.df.columns:
+                label_start_idx = 2  # 跳过'Image Index'和'image_path'
+            
+            labels = self.df.iloc[idx, label_start_idx:].values.astype(np.float32)
             
             if self.transform:
-                image = self.transform(image)
+                # 检查transform是否是albumentations类型
+                # 如果是，需要以字典形式传递
+                try:
+                    # 尝试直接调用，如果是torchvision的transform
+                    image = self.transform(image)
+                except (KeyError, TypeError):
+                    # 如果是albumentations的transform，需要转换为numpy数组并以字典形式传递
+                    import albumentations as A
+                    if isinstance(self.transform, A.Compose):
+                        # 转换为numpy数组
+                        image_np = np.array(image)
+                        # 以字典形式传递
+                        transformed = self.transform(image=image_np)
+                        image = transformed['image']
+                    else:
+                        # 其他情况，尝试直接调用
+                        image = self.transform(image)
                 
             return image, labels
+        
+        def __len__(self):
+            return len(self.df)
     
     return FixedChestXRayDataset(valid_df, image_paths, transform, phase, image_size)
 
@@ -321,18 +349,18 @@ def train_model(config):
     # 创建TensorBoard记录器
     writer = SummaryWriter(os.path.join(config['paths']['output_dir'], 'tensorboard'))
     
-    # 加载和预处理数据 - 使用修复版本
+    # 加载和预处理数据
     logger.info("加载数据...")
-    try:
-        train_df, val_df, test_df, label_columns, class_weights = load_and_preprocess_data(config)
-    except Exception as e:
-        logger.error(f"数据加载失败: {e}")
-        raise
+    train_df, val_df, test_df, label_columns, class_weights = load_and_preprocess_data(config)
     
     # 根据实际类别数更新配置
     actual_num_classes = len(label_columns)
     config['model']['num_classes'] = actual_num_classes
     logger.info(f"实际类别数: {actual_num_classes}")
+    
+    # 打印DataFrame结构以调试
+    logger.info(f"训练DataFrame形状: {train_df.shape}")
+    logger.info(f"训练DataFrame列: {train_df.columns.tolist()}")
     
     # 创建数据集 - 使用修复版本
     logger.info("创建训练数据集...")
@@ -342,7 +370,8 @@ def train_model(config):
         ChestXRayDataset.get_transforms(config, 'train'),
         'train',
         logger,
-        config
+        config,
+        label_columns
     )
     
     logger.info("创建验证数据集...")
@@ -352,8 +381,13 @@ def train_model(config):
         ChestXRayDataset.get_transforms(config, 'val'),
         'val',
         logger,
-        config
+        config,
+        label_columns
     )
+    
+    # 检查数据集大小
+    logger.info(f"训练数据集大小: {len(train_dataset)}")
+    logger.info(f"验证数据集大小: {len(val_dataset)}")
     
     # 创建数据加载器
     train_loader = DataLoader(
@@ -373,6 +407,10 @@ def train_model(config):
         pin_memory=True
     )
     
+    # 检查数据加载器
+    logger.info(f"训练数据加载器批次数量: {len(train_loader)}")
+    logger.info(f"验证数据加载器批次数量: {len(val_loader)}")
+    
     # 创建模型
     logger.info("创建模型...")
     model = create_model(config, device)
@@ -382,10 +420,7 @@ def train_model(config):
         criterion = FocalLoss(alpha=0.25, gamma=2.0)
     else:
         # 使用加权BCE损失
-        # class_weights 现在是一个numpy数组，每个值是正样本的权重
-        # 我们需要将其转换为张量
         if isinstance(class_weights, np.ndarray) or isinstance(class_weights, list):
-            # 检查每个元素是否是标量
             weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
             logger.info(f"使用类别权重: {[float(w) for w in class_weights]}")
             criterion = WeightedBCELoss(pos_weight=weights_tensor)
@@ -400,7 +435,7 @@ def train_model(config):
         weight_decay=config['training']['weight_decay']
     )
     
-    # 学习率调度器 - 移除verbose参数
+    # 学习率调度器
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', factor=0.5, patience=5
     )
@@ -511,7 +546,8 @@ def train_model(config):
             ChestXRayDataset.get_transforms(config, 'val'),
             'test',
             logger,
-            config
+            config,
+            label_columns
         )
         
         test_loader = DataLoader(
