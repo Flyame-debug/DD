@@ -53,12 +53,36 @@ def create_model(config, device):
             pretrained=pretrained,
             dropout_rate=dropout_rate
         )
-    elif model_name == 'efficientnet-b4':
-        base_model = EfficientNetB4MultiLabel(
-            num_classes=num_classes,
-            pretrained=pretrained,
-            dropout_rate=dropout_rate
-        )
+    elif model_name.startswith('efficientnet'):
+        # 支持所有efficientnet变体
+        from efficientnet_pytorch import EfficientNet
+        
+        # 提取版本号，如 'b0', 'b1', 'b4' 等
+        if '-' in model_name:
+            # 格式: efficientnet-b4
+            version = model_name.split('-')[1]
+        elif '_' in model_name:
+            # 格式: efficientnet_b0
+            version = model_name.split('_')[1]
+        else:
+            # 默认使用b0
+            version = 'b0'
+        
+        # 构建完整的模型名称
+        efficientnet_name = f'efficientnet-{version}'
+        
+        if pretrained:
+            base_model = EfficientNet.from_pretrained(efficientnet_name, num_classes=num_classes)
+        else:
+            base_model = EfficientNet.from_name(efficientnet_name, num_classes=num_classes)
+        
+        # 修改分类器以添加dropout
+        if dropout_rate > 0:
+            in_features = base_model._fc.in_features
+            base_model._fc = nn.Sequential(
+                nn.Dropout(dropout_rate),
+                nn.Linear(in_features, num_classes)
+            )
     else:
         raise ValueError(f"不支持的模型: {model_name}")
     
