@@ -229,7 +229,7 @@ def test_model(model, test_loader, device, config):
     all_labels = np.concatenate(all_labels, axis=0)
     
     # 计算测试指标
-    test_metrics = calculate_metrics(all_labels, all_probs, threshold=0.5)
+    test_metrics = calculate_metrics(all_probs,all_labels, threshold=0.5)
     
     return test_metrics
 
