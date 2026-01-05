@@ -616,13 +616,13 @@ def train_model(config):
         
         # 测试模型
         test_metrics = test_model(model, test_loader, device, config)
-        logger.info(f"测试结果 - AUC: {test_metrics['auc_mean']:.4f}, F1: {test_metrics['f1_mean']:.4f}")
-        
+        logger.info(f"测试结果 - AUC: {test_metrics.get('auc_mean', test_metrics.get('auc', 0.0)):.4f}, F1: {test_metrics.get('f1_mean', test_metrics.get('f1', 0.0)):.4f}")
+       
         # 保存测试结果
         test_results_path = os.path.join(config['paths']['output_dir'], 'test_results.txt')
         with open(test_results_path, 'w') as f:
-            f.write(f"Test AUC: {test_metrics['auc_mean']:.4f}\n")
-            f.write(f"Test F1: {test_metrics['f1_mean']:.4f}\n")
+            f.write(f"Test AUC: {test_metrics.get('auc_mean', test_metrics.get('auc', 0.0)):.4f}\n")
+            f.write(f"Test F1: {test_metrics.get('f1_mean', test_metrics.get('f1', 0.0)):.4f}\n")
             f.write(f"Per-class AUC: {test_metrics['auc']}\n")
             f.write(f"Per-class F1: {test_metrics['f1']}\n")
     
