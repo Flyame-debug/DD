@@ -119,8 +119,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, writer=N
         
         # 记录
         running_loss += loss.item()
-        all_preds.append(outputs.detach().cpu().numpy())
-        all_labels.append(labels.detach().cpu().numpy())
+        all_preds.append(outputs.detach())
+        all_labels.append(labels.detach())
         
         # 更新进度条
         pbar.set_postfix({'loss': loss.item()})
@@ -131,11 +131,27 @@ def train_epoch(model, dataloader, criterion, optimizer, device, epoch, writer=N
                              epoch * len(dataloader) + batch_idx)
     
     epoch_loss = running_loss / len(dataloader)
-    all_preds = np.concatenate(all_preds, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
     
-    # 计算训练指标
-    metrics = calculate_metrics(all_labels, all_preds, threshold=0.5)
+    # 计算训练指标 - 修复参数顺序
+    if all_preds and all_labels:
+        all_preds = torch.cat(all_preds, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+        # 注意：第一个参数是预测，第二个参数是标签
+        metrics = calculate_metrics(all_preds, all_labels, threshold=0.5)
+        
+        # 确保键名兼容
+        if 'auc_mean' not in metrics and 'auc' in metrics:
+            metrics['auc_mean'] = metrics['auc']
+        if 'f1_mean' not in metrics and 'f1' in metrics:
+            metrics['f1_mean'] = metrics['f1']
+    else:
+        metrics = {
+            'auc_mean': 0.0,
+            'f1_mean': 0.0,
+            'accuracy': 0.0,
+            'precision': 0.0,
+            'recall': 0.0
+        }
     
     return epoch_loss, metrics
 
@@ -155,23 +171,39 @@ def validate_epoch(model, dataloader, criterion, device, epoch, writer=None):
             loss = criterion(outputs, labels)
             
             running_loss += loss.item()
-            all_preds.append(outputs.cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
+            all_preds.append(outputs.cpu())
+            all_labels.append(labels.cpu())
             
             pbar.set_postfix({'loss': loss.item()})
     
     epoch_loss = running_loss / len(dataloader)
-    all_preds = np.concatenate(all_preds, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
     
-    # 计算验证指标
-    metrics = calculate_metrics(all_labels, all_preds, threshold=0.5)
+    # 计算验证指标 - 修复参数顺序
+    if all_preds and all_labels:
+        all_preds = torch.cat(all_preds, dim=0)
+        all_labels = torch.cat(all_labels, dim=0)
+        # 注意：第一个参数是预测，第二个参数是标签
+        metrics = calculate_metrics(all_preds, all_labels, threshold=0.5)
+        
+        # 确保键名兼容
+        if 'auc_mean' not in metrics and 'auc' in metrics:
+            metrics['auc_mean'] = metrics['auc']
+        if 'f1_mean' not in metrics and 'f1' in metrics:
+            metrics['f1_mean'] = metrics['f1']
+    else:
+        metrics = {
+            'auc_mean': 0.0,
+            'f1_mean': 0.0,
+            'accuracy': 0.0,
+            'precision': 0.0,
+            'recall': 0.0
+        }
     
     # 记录到TensorBoard
     if writer:
         writer.add_scalar('Val/loss', epoch_loss, epoch)
-        writer.add_scalar('Val/auc_mean', metrics['auc_mean'], epoch)
-        writer.add_scalar('Val/f1_mean', metrics['f1_mean'], epoch)
+        writer.add_scalar('Val/auc_mean', metrics.get('auc_mean', metrics.get('auc', 0.0)), epoch)
+        writer.add_scalar('Val/f1_mean', metrics.get('f1_mean', metrics.get('f1', 0.0)), epoch)
     
     return epoch_loss, metrics
 
@@ -559,7 +591,7 @@ def train_model(config):
     logger.info("在测试集上评估最佳模型...")
     best_model_path = os.path.join(config['paths']['output_dir'], 'best_model.pth')
     if os.path.exists(best_model_path):
-        checkpoint = torch.load(best_model_path, map_location=device)
+        checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         
         # 创建测试数据集
