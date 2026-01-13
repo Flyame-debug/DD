@@ -35,27 +35,91 @@ def setup_environment():
     return device
 
 def load_best_model(config_path, model_path):
-    """加载最佳模型"""
+    """通用模型加载器，支持多种模型结构"""
     import yaml
-    from models.model_enhanced import EnhancedMultiLabelModel
+    import torch
+    import timm
+    from models.model_enhanced import EnhancedMultiLabelModel, AttentionBlock
     
+    # 加载配置和检查点
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    # 创建模型
-    model = EnhancedMultiLabelModel(
-        base_model=config['model']['backbone'],
-        num_classes=config['model']['num_classes'],
-        pretrained=False,
-        dropout_rate=config['model']['dropout_rate'],
-        use_attention=config['model'].get('use_attention', True)
-    )
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
     
-    # 加载权重
-    checkpoint = torch.load(model_path, map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # 获取模型配置
+    backbone_name = config.get('model', {}).get('backbone', 'efficientnet_b0')
+    num_classes = config.get('model', {}).get('num_classes', 14)
+    dropout_rate = config.get('model', {}).get('dropout_rate', 0.4)
+    use_attention = config.get('model', {}).get('use_attention', True)
     
-    return model, config, checkpoint.get('class_names', [])
+    # 分析状态字典结构
+    keys = list(state_dict.keys())
+    
+    # 判断模型类型
+    if any(k.startswith('base_model.') for k in keys[:10]):
+        print("检测到包装的基础EfficientNet模型")
+        # 创建EnhancedMultiLabelModel
+        model = EnhancedMultiLabelModel(
+            base_model=backbone_name,
+            num_classes=num_classes,
+            pretrained=False,
+            dropout_rate=dropout_rate,
+            use_attention=use_attention
+        )
+        
+        # 需要转换键名
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if key.startswith('base_model.'):
+                # 转换为EnhancedMultiLabelModel期望的格式
+                new_key = key.replace('base_model.', 'backbone.')
+                new_state_dict[new_key] = value
+            elif key.startswith('base_model._fc.'):
+                # 基础分类器转换为全局分类器
+                new_key = key.replace('base_model._fc.', 'global_classifier.')
+                new_state_dict[new_key] = value
+            else:
+                new_state_dict[key] = value
+        
+        # 加载状态字典（strict=False允许不匹配的键）
+        model.load_state_dict(new_state_dict, strict=False)
+        
+    elif any(k.startswith('backbone.') for k in keys[:10]):
+        print("检测到EnhancedMultiLabelModel")
+        model = EnhancedMultiLabelModel(
+            base_model=backbone_name,
+            num_classes=num_classes,
+            pretrained=False,
+            dropout_rate=dropout_rate,
+            use_attention=use_attention
+        )
+        model.load_state_dict(state_dict)
+        
+    elif any(k.startswith('_conv_stem') or k.startswith('_bn0') for k in keys[:10]):
+        print("检测到基础EfficientNet模型（无包装）")
+        model = timm.create_model(
+            backbone_name,
+            pretrained=False,
+            num_classes=num_classes
+        )
+        model.load_state_dict(state_dict)
+        
+    else:
+        raise ValueError(f"无法识别的模型结构")
+    
+    # 获取类别名称
+    class_names = checkpoint.get('class_names', [
+        'Atelectasis', 'Cardiomegaly', 'Consolidation', 'Edema', 
+        'Effusion', 'Emphysema', 'Fibrosis', 'Hernia', 'Infiltration', 
+        'Mass', 'No Finding', 'Nodule', 'Pleural_Thickening', 
+        'Pneumonia', 'Pneumothorax'
+    ])
+    
+    return model, config, class_names
+    
+    #return model, config, checkpoint.get('class_names', [])
 
 def generate_all_materials(model, config, class_names, test_loader, output_dir):
     """生成所有PPT素材"""

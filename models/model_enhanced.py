@@ -117,6 +117,13 @@ class EnhancedMultiLabelModel(nn.Module):
         """前向传播"""
         # 提取特征
         features = self.backbone(x)
+
+        # 如果特征已经是2维，重塑为4维
+        if features.dim() == 2:
+            # 获取特征维度
+            b, c = features.size()
+            # 重塑为 [batch, channels, 1, 1]
+            features = features.view(b, c, 1, 1)
         
         # 应用注意力机制（如果启用）
         if self.use_attention:
