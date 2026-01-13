@@ -29,7 +29,7 @@ model:
 
 training:
   batch_size: 32
-  epochs: 40                # 增加epoch
+  epochs: 10               # 增加epoch
   learning_rate: 0.0003     # 大幅降低学习率！
   weight_decay: 5.0e-05     # 降低权重衰减
   early_stopping_patience: 20
